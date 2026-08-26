@@ -14,7 +14,23 @@
 
 package provider
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"huatuo-bamai/internal/bpf"
+)
+
+type closeBPFStub struct {
+	bpf.BPF
+	closeErr error
+	closed   bool
+}
+
+func (s *closeBPFStub) Close() error {
+	s.closed = true
+	return s.closeErr
+}
 
 func TestValidateStackID(t *testing.T) {
 	tests := []struct {
@@ -33,4 +49,24 @@ func TestValidateStackID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCloseBPF(t *testing.T) {
+	t.Run("nil BPF", func(t *testing.T) {
+		if err := closeBPF(nil); err != nil {
+			t.Fatalf("closeBPF(nil) error = %v, want nil", err)
+		}
+	})
+
+	t.Run("close error", func(t *testing.T) {
+		wantErr := errors.New("close failed")
+		stub := &closeBPFStub{closeErr: wantErr}
+
+		if err := closeBPF(stub); !errors.Is(err, wantErr) {
+			t.Fatalf("closeBPF() error = %v, want %v", err, wantErr)
+		}
+		if !stub.closed {
+			t.Fatal("closeBPF() did not call BPF.Close")
+		}
+	})
 }

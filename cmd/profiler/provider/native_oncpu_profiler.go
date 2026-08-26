@@ -61,7 +61,7 @@ func (p *cpuNativeProfiler) Stop(_ *pcontext.ProfilerContext) error {
 	if p.offCPUStatsEnabled {
 		logOffCPUBPFStats(p.bpf)
 	}
-	return closeBpfSafe(p.bpf)
+	return closeBPF(p.bpf)
 }
 
 func (p *cpuNativeProfiler) Start(pctx *pcontext.ProfilerContext) error {

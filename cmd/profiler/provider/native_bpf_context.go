@@ -425,13 +425,9 @@ func (r *ringBufferContext) resolveUserStack(stackMapID uint32, stackID int32, p
 	return r.usym.UsymStackStrsReversed(pid, trace[:], len(trace))
 }
 
-// closeBpfSafe safely closes a BPF object, handling nil checks and logging errors.
-func closeBpfSafe(b bpf.BPF) error {
+func closeBPF(b bpf.BPF) error {
 	if b == nil {
 		return nil
 	}
-	if err := b.Close(); err != nil {
-		log.Warnf("closing eBPF: %v", err)
-	}
-	return nil
+	return b.Close()
 }

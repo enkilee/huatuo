@@ -88,7 +88,7 @@ func (p *memNativeProfiler) NewAggregator(pctx *pcontext.ProfilerContext) (aggre
 }
 
 func (p *memNativeProfiler) Stop(_ *pcontext.ProfilerContext) error {
-	return closeBpfSafe(p.bpf)
+	return closeBPF(p.bpf)
 }
 
 func (p *memNativeProfiler) Start(pctx *pcontext.ProfilerContext) error {
