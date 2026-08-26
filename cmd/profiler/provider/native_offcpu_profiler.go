@@ -39,7 +39,7 @@ const (
 )
 
 type offCPUStackKey struct {
-	Stack    stackIDPair
+	Stack    rawStackIDs
 	Category string
 }
 
@@ -188,7 +188,7 @@ func (r *ringBufferContext) aggregateOffCPUBatch(batch []any, enqueue func(any))
 		}
 		stack := offCPUStackKey{
 			Category: offCPUCategory(event.Kind),
-			Stack: stackIDPair{
+			Stack: rawStackIDs{
 				KernelStackID: event.Base.Kernstack,
 				UserStackID:   event.Base.Userstack,
 			},
@@ -202,11 +202,20 @@ func (r *ringBufferContext) aggregateOffCPUBatch(batch []any, enqueue func(any))
 	for process, stacks := range countsByProcess {
 		for stack, duration := range stacks {
 			enqueue(&stackSample{
-				Process:     process,
-				UserStack:   r.resolveUserStack(r.stackMapAID, stack.Stack.UserStackID, process.PID),
-				KernelStack: r.resolveKernelStack(r.stackMapAID, stack.Stack.KernelStackID),
-				Value:       duration,
-				Category:    stack.Category,
+				Process: process,
+				StackTrace: symbolizedStackTrace{
+					UserFrames: r.resolveUserStack(
+						r.stackMapAID,
+						stack.Stack.UserStackID,
+						process.PID,
+					),
+					KernelFrames: r.resolveKernelStack(
+						r.stackMapAID,
+						stack.Stack.KernelStackID,
+					),
+				},
+				Value:    duration,
+				Category: stack.Category,
 			})
 		}
 	}

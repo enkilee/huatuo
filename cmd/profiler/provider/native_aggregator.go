@@ -15,8 +15,10 @@
 package provider
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 	"os"
 	"strconv"
 	"strings"
@@ -73,37 +75,32 @@ func (a *nativeAggregator) Aggregate(rec any) {
 
 	switch v := rec.(type) {
 	case *stackSample:
-		key := fmt.Sprintf(
-			"%d\x00%s\x00%s\x00%s\x00%s",
-			v.Process.PID,
-			v.Process.Comm,
-			v.Category,
-			v.UserStack,
-			v.KernelStack,
-		)
+		key := makeStackSampleKey(v)
 
 		if existed, ok := a.aggrMap[key]; ok {
 			existed.Value += v.Value
 		} else {
 			a.aggrMap[key] = &stackSample{
-				Process:     v.Process,
-				UserStack:   v.UserStack,
-				KernelStack: v.KernelStack,
-				Value:       v.Value,
-				Category:    v.Category,
+				Process:    v.Process,
+				StackTrace: v.StackTrace,
+				Value:      v.Value,
+				Category:   v.Category,
 			}
 		}
 
 		log.Debugf("aggregate: pid=%d comm=%s samples=%d key=%q", v.Process.PID, v.Process.Comm, v.Value, key)
 
 		if a.formatter != nil {
-			frames := []string{
-				fmt.Sprintf("process %d:%s", v.Process.PID, v.Process.Comm),
+			frameCount := 1 + v.StackTrace.frameCount()
+			if v.Category != "" {
+				frameCount++
 			}
+			frames := make([]string, 0, frameCount)
+			frames = append(frames, fmt.Sprintf("process %d:%s", v.Process.PID, v.Process.Comm))
 			if v.Category != "" {
 				frames = append(frames, v.Category)
 			}
-			frames = appendStackFrames(frames, v.UserStack, v.KernelStack)
+			frames = v.StackTrace.appendTo(frames)
 			log.Debugf("formatter add: frames=%v count=%d", frames, v.Value)
 			if err := a.formatter.Add(&output.Sample{Frames: frames, Count: v.Value}); err != nil {
 				log.Warnf("formatter add sample: %v", err)
@@ -111,7 +108,7 @@ func (a *nativeAggregator) Aggregate(rec any) {
 		}
 
 	case *lockSample:
-		key := fmt.Sprintf("%s\x00%d", v.UserStack, v.LockAddress)
+		key := makeLockSampleKey(v)
 		if existed, ok := a.lockAggrMap[key]; ok {
 			existed.ContentionCount += v.ContentionCount
 			existed.WaitNanoseconds += v.WaitNanoseconds
@@ -119,8 +116,7 @@ func (a *nativeAggregator) Aggregate(rec any) {
 			a.lockAggrMap[key] = &lockSample{
 				Process:         v.Process,
 				LockAddress:     v.LockAddress,
-				UserStack:       v.UserStack,
-				KernelStack:     v.KernelStack,
+				StackTrace:      v.StackTrace,
 				WaitNanoseconds: v.WaitNanoseconds,
 				ContentionCount: v.ContentionCount,
 			}
@@ -169,7 +165,7 @@ func (a *nativeAggregator) OutputFormatter() output.Formatter {
 func (a *nativeAggregator) buildLockFolded() {
 	for _, rec := range a.lockAggrMap {
 		frames, value := lockPrefixFrames(rec)
-		frames = appendStackFrames(frames, rec.UserStack, rec.KernelStack)
+		frames = rec.StackTrace.appendTo(frames)
 		if err := a.formatter.Add(&output.Sample{Frames: frames, Count: int64(value)}); err != nil {
 			log.Warnf("formatter add lock sample: %v", err)
 		}
@@ -195,7 +191,7 @@ func (a *nativeAggregator) snapshotCpuMemProfile(pctx *pcontext.ProfilerContext)
 		if rec.Category != "" {
 			prefixes = append(prefixes, rec.Category)
 		}
-		item := buildTreeItem(prefixes, rec.UserStack, rec.KernelStack, uint64(rec.Value))
+		item := buildTreeItem(prefixes, rec.StackTrace, uint64(rec.Value))
 		tree = append(tree, item)
 	}
 
@@ -210,28 +206,70 @@ func (a *nativeAggregator) snapshotLockProfile(pctx *pcontext.ProfilerContext) (
 	tree := make([]*profiler.TreeItem, 0, len(a.lockAggrMap))
 	for _, rec := range a.lockAggrMap {
 		prefixes, value := lockPrefixFrames(rec)
-		tree = append(tree, buildTreeItem(prefixes, rec.UserStack, rec.KernelStack, value))
+		tree = append(tree, buildTreeItem(prefixes, rec.StackTrace, value))
 	}
 	return buildPprofData(pctx, tree)
 }
 
-func appendStackFrames(frames []string, userStack, kernelStack string) []string {
-	u := strings.TrimSuffix(userStack, ";")
-	k := strings.TrimSuffix(kernelStack, ";")
+func makeStackSampleKey(sample *stackSample) string {
+	var key strings.Builder
+	key.Grow(stackSampleKeySize(sample))
+	appendStackKeyUint(&key, uint64(sample.Process.PID))
+	appendStackKeyString(&key, sample.Process.Comm)
+	appendStackKeyString(&key, sample.Category)
+	appendStackKeyFrames(&key, sample.StackTrace.UserFrames)
+	appendStackKeyFrames(&key, sample.StackTrace.KernelFrames)
+	return key.String()
+}
 
-	for _, s := range strings.Split(u, ";") {
-		if s != "" {
-			frames = append(frames, s)
-		}
+func makeLockSampleKey(sample *lockSample) string {
+	var key strings.Builder
+	key.Grow(stackKeyUintSize(sample.LockAddress) + stackFramesKeySize(sample.StackTrace.UserFrames))
+	appendStackKeyUint(&key, sample.LockAddress)
+	appendStackKeyFrames(&key, sample.StackTrace.UserFrames)
+	return key.String()
+}
+
+func stackSampleKeySize(sample *stackSample) int {
+	return stackKeyUintSize(uint64(sample.Process.PID)) +
+		stackKeyStringSize(sample.Process.Comm) +
+		stackKeyStringSize(sample.Category) +
+		stackFramesKeySize(sample.StackTrace.UserFrames) +
+		stackFramesKeySize(sample.StackTrace.KernelFrames)
+}
+
+func stackFramesKeySize(frames []string) int {
+	size := stackKeyUintSize(uint64(len(frames)))
+	for _, frame := range frames {
+		size += stackKeyStringSize(frame)
 	}
+	return size
+}
 
-	for _, s := range strings.Split(k, ";") {
-		if s != "" {
-			frames = append(frames, s)
-		}
+func stackKeyStringSize(value string) int {
+	return stackKeyUintSize(uint64(len(value))) + len(value)
+}
+
+func stackKeyUintSize(value uint64) int {
+	return (bits.Len64(value|1) + 6) / 7
+}
+
+func appendStackKeyFrames(key *strings.Builder, frames []string) {
+	appendStackKeyUint(key, uint64(len(frames)))
+	for _, frame := range frames {
+		appendStackKeyString(key, frame)
 	}
+}
 
-	return frames
+func appendStackKeyString(key *strings.Builder, value string) {
+	appendStackKeyUint(key, uint64(len(value)))
+	key.WriteString(value)
+}
+
+func appendStackKeyUint(key *strings.Builder, value uint64) {
+	var encoded [binary.MaxVarintLen64]byte
+	length := binary.PutUvarint(encoded[:], value)
+	key.Write(encoded[:length])
 }
 
 // parseCollapsedLine splits a "stack count" folded line into its parts.
@@ -257,27 +295,20 @@ func parseCollapsedLine(line string) (stack string, count int64, ok bool) {
 	return stack, count, true
 }
 
-func buildTreeItem(prefixes []string, userStack, kernelStack string, value uint64) *profiler.TreeItem {
-	ustacks := strings.Split(userStack, ";")
-	kstacks := strings.Split(kernelStack, ";")
-
-	stackLen := len(prefixes) + len(ustacks) + len(kstacks)
+func buildTreeItem(prefixes []string, trace symbolizedStackTrace, value uint64) *profiler.TreeItem {
+	stackLen := len(prefixes) + trace.frameCount()
 	stack := make([][]byte, 0, stackLen)
 
 	for _, p := range prefixes {
 		stack = append(stack, []byte(p))
 	}
 
-	for _, s := range ustacks {
-		if s != "" {
-			stack = append(stack, []byte(s))
-		}
+	for _, frame := range trace.UserFrames {
+		stack = append(stack, []byte(frame))
 	}
 
-	for _, s := range kstacks {
-		if s != "" {
-			stack = append(stack, []byte(s))
-		}
+	for _, frame := range trace.KernelFrames {
+		stack = append(stack, []byte(frame))
 	}
 
 	return &profiler.TreeItem{

@@ -214,7 +214,7 @@ func (p *cpuNativeProfiler) readOnCPUDataLoop(ctx context.Context, enqueue func(
 	}
 	defer ringCtx.Close()
 
-	ticker := time.NewTicker(drainTick)
+	ticker := time.NewTicker(drainInterval)
 	defer ticker.Stop()
 
 	for {
@@ -224,8 +224,8 @@ func (p *cpuNativeProfiler) readOnCPUDataLoop(ctx context.Context, enqueue func(
 		case <-ticker.C:
 		}
 
-		// Use unified drainActiveRingBuffer with CPU event factory
-		stackCountsByProc, ring, err := ringCtx.drainActiveRingBuffer(
+		// Use unified drainFrozenRingBuffer with CPU event factory
+		sampleCountsByProcess, ring, err := ringCtx.drainFrozenRingBuffer(
 			func() any { return &abi.ProfilerOnCPUEvent{} },
 			nil,
 		) // No value conversion needed for CPU profiler
@@ -238,8 +238,8 @@ func (p *cpuNativeProfiler) readOnCPUDataLoop(ctx context.Context, enqueue func(
 			continue
 		}
 
-		if len(stackCountsByProc) > 0 {
-			ringCtx.aggregateStacksAndEnqueue(stackCountsByProc, ring, enqueue, nil)
+		if len(sampleCountsByProcess) > 0 {
+			ringCtx.aggregateStacksAndEnqueue(sampleCountsByProcess, ring, enqueue, nil)
 		}
 	}
 }

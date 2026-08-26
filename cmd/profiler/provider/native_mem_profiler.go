@@ -270,7 +270,7 @@ func (p *memNativeProfiler) ReadDataLoop(ctx context.Context, enqueue func(any))
 	}
 	defer ringCtx.Close()
 
-	ticker := time.NewTicker(drainTick)
+	ticker := time.NewTicker(drainInterval)
 	defer ticker.Stop()
 
 	for {
@@ -280,8 +280,8 @@ func (p *memNativeProfiler) ReadDataLoop(ctx context.Context, enqueue func(any))
 		case <-ticker.C:
 		}
 
-		// Use unified drainActiveRingBuffer with Memory event factory
-		stackCountsByProc, ring, err := ringCtx.drainActiveRingBuffer(
+		// Use unified drainFrozenRingBuffer with Memory event factory
+		sampleCountsByProcess, ring, err := ringCtx.drainFrozenRingBuffer(
 			func() any { return &abi.ProfilerEventBase{} },
 			p.convertValueToBytes,
 		) // Convert pages to bytes
@@ -294,8 +294,8 @@ func (p *memNativeProfiler) ReadDataLoop(ctx context.Context, enqueue func(any))
 			continue
 		}
 
-		if len(stackCountsByProc) > 0 {
-			ringCtx.aggregateStacksAndEnqueue(stackCountsByProc, ring, enqueue, p.convertValueToBytes)
+		if len(sampleCountsByProcess) > 0 {
+			ringCtx.aggregateStacksAndEnqueue(sampleCountsByProcess, ring, enqueue, p.convertValueToBytes)
 		}
 	}
 }
