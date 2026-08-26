@@ -110,12 +110,12 @@ func TestAggregateOffCPUBatch(t *testing.T) {
 }
 
 func TestNativeAggregatorSeparatesOffCPUCategories(t *testing.T) {
-	aggr := &nativeAggregator{aggrMap: make(map[string]*stackSample)}
+	aggr := &nativeAggregator{stackSamples: make(map[stackSampleKey]int64)}
 	proc := processKey{PID: 123, Comm: "worker"}
 	trace := symbolizedStackTrace{UserFrames: []string{"main", "wait"}}
 	aggr.Aggregate(&stackSample{Process: proc, StackTrace: trace, Value: 10, Category: "off-CPU blocked"})
 	aggr.Aggregate(&stackSample{Process: proc, StackTrace: trace, Value: 20, Category: "scheduling delay"})
-	require.Len(t, aggr.aggrMap, 2)
+	require.Len(t, aggr.stackSamples, 2)
 }
 
 func TestNativeOffCPUBPFConstants(t *testing.T) {
