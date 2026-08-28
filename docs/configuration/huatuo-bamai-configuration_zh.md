@@ -23,12 +23,12 @@ weight: 4
 # - BlackList
 # Global blacklist for tracing and metrics.
 #
-BlackList = ["netdev_hw", "metax_gpu", "ascend_npu", "diskio", "tcp_retransmit"]
+BlackList = ["netdev_hw", "netdev_qdisc", "metax_gpu", "ascend_npu", "diskio", "tcp_retransmit", "mthreads_gpu"]
 ```
 
 - **BlackList**：全局追踪与指标黑名单。
 
-  用于排除特定模块的追踪和指标采集，避免无关噪声或高开销探针。默认值为 `["netdev_hw", "metax_gpu", "ascend_npu", "diskio", "tcp_retransmit"]`，即全局禁用网络设备硬件层（netdev_hw）、Metax GPU、Ascend NPU、基于 procfs 的磁盘 I/O 指标和 TCP 重传追踪。需要启用磁盘 I/O 指标时从黑名单中移除 `diskio`；需要启用 TCP 重传追踪及其丢包关联缓存时移除 `tcp_retransmit`。
+  用于排除特定模块的追踪和指标采集，避免无关噪声或高开销探针。默认值为 `["netdev_hw", "netdev_qdisc", "metax_gpu", "ascend_npu", "diskio", "tcp_retransmit", "mthreads_gpu"]`，即全局禁用网络设备硬件层（netdev_hw）、队列调度统计（netdev_qdisc）、Metax GPU、Ascend NPU、基于 procfs 的磁盘 I/O 指标、TCP 重传追踪和摩尔线程 GPU 监控。需要启用磁盘 I/O 指标时从黑名单中移除 `diskio`；需要启用 TCP 重传追踪及其丢包关联缓存时移除 `tcp_retransmit`；需要启用摩尔线程 GPU 指标采集时移除 `mthreads_gpu`（要求已安装 MTML 库）。
 
   **说明**：添加黑名单项可有效降低资源消耗，尤其在特定硬件环境中；支持数组格式，可根据实际业务扩展。
 
@@ -1022,6 +1022,53 @@ BlackList = ["netdev_hw", "metax_gpu", "ascend_npu", "diskio", "tcp_retransmit"]
 - **MountPointsIncluded**：采集挂载点统计的路径正则。默认示例含 /、/home、/boot。
 
   **说明**：用于监控关键文件系统使用情况。
+
+#### 9.7 摩尔线程 GPU 指标
+
+```bash
+# MetricCollector.Mthreads
+#
+# 通过 MTML（摩尔线程管理库）共享库采集摩尔线程 GPU 指标。
+# 库文件在启动时通过系统动态链接器按 SONAME 顺序自动发现
+# （libmtml.so.2，然后 libmtml.so），无需硬编码路径。
+#
+# 从 BlackList 中移除 "mthreads_gpu" 以启用此采集器。
+#
+# - EnableHealth
+# 启用健康指标：温度、功耗、利用率、时钟、风扇、pstate、VPU。
+# 默认值：true
+#
+# - EnablePCIe
+# 启用 PCIe 链路指标：当前速率/宽度和重放计数器。
+# 默认值：false
+#
+# - EnableMTLink
+# 启用 MtLink 互连指标：每链路状态和带宽。
+# 默认值：false
+#
+[MetricCollector.Mthreads]
+    # EnableHealth = true
+    # EnablePCIe = false
+    # EnableMTLink = false
+```
+
+- **EnableHealth**：控制健康相关指标的采集。
+
+  默认值：true。启用后采集：GPU/内存温度（`gpu_temperature_celsius`、`memory_temperature_celsius`）、功耗及限制（`device_power_watts`、`gpu_power_limit_watts`、`gpu_power_default_limit_watts`）、GPU/内存利用率（`gpu_utilization_percent`、`memory_utilization_percent`）、时钟频率（`gpu_clock_mhz`、`gpu_max_clock_mhz`、`memory_clock_mhz`、`memory_max_clock_mhz`）、电压（`gpu_voltage_volts`）、内存容量（`memory_total_bytes`、`memory_used_bytes`）、风扇转速（`fan_rpm`、`fan_speed_percent`）、性能状态（`gpu_pstate`）以及 VPU 指标（`vpu_utilization_percent`、`vpu_encoder_utilization_percent`、`vpu_decoder_utilization_percent`、`vpu_clock_mhz`）。
+
+- **EnablePCIe**：控制 PCIe 链路指标的采集。
+
+  默认值：false。启用后采集：当前 PCIe 链路速率和宽度（`pcie_link_speed_gt_per_sec`、`pcie_link_width_lanes`）、最大能力值（`pcie_link_max_speed_gt_per_sec`、`pcie_link_max_width_lanes`）以及重放计数器（`pcie_replay_total`）。
+
+- **EnableMTLink**：控制 MtLink 互连指标的采集。
+
+  默认值：false。启用后采集：设备级静态规格（每链路带宽 `mtlink_link_bandwidth_gb_s` 和链路数 `mtlink_link_count`）以及每链路状态（`mtlink_state`）。
+
+**库发现机制**：启动时，采集器通过系统动态链接器（遵循 `LD_LIBRARY_PATH` 和 `/etc/ld.so.cache`）依次搜索 `libmtml.so.2` 和 `libmtml.so`。如果未找到库文件，采集器记录警告并在进程生命周期内保持禁用状态。库发现仅在启动时执行；更改 `LD_LIBRARY_PATH` 或安装新的 MTML 版本需要重启。
+
+**热更新语义**：`EnableHealth`、`EnablePCIe`、`EnableMTLink` 在每次 scrape 时从最新配置快照中读取，因此切换这些开关后下一个 Prometheus scrape 即可生效，无需重启 `huatuo-bamai`。`false → true → false` 的转换会在每次变更后的下一个 scrape 上按预期发布或停止发布对应的指标组。
+
+注意：在进程已经启动且因 `libmtml.so` 缺失导致采集器被禁用的情况下，要启用该采集器（即把 `mthreads_gpu` 从 `BlackList` 中移除）需要重启进程。采集器工厂只在初始化时运行，运行时即使库被加载成功也不会注册新的采集器。
 
 ### 10. Pod 配置
 
