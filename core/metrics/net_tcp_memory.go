@@ -76,7 +76,7 @@ func parseTcpMemory() (*tcpMemoryStat, error) {
 		if p.Mem != nil {
 			return &tcpMemoryStat{
 				memoryPages: float64(*p.Mem),
-				memoryBytes: float64(*p.Mem * 4096),
+				memoryBytes: float64(*p.Mem) * float64(defaultHostPageSize),
 				memoryLimit: float64(values[2]), // tcpMemLimit
 			}, nil
 		}
