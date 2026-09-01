@@ -370,15 +370,15 @@ func httpDoRequest(client *http.Client, url string) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, truncated, err := requestLimitedBody(resp.Body, maxKubeletErrorBodyBytes)
+		body, _, err := requestLimitedBody(resp.Body, maxKubeletErrorBodyBytes)
 		if err != nil {
 			return nil, fmt.Errorf("http: %s, read body: %w", url, err)
 		}
-		message := requestErrorBody(body)
-		if truncated {
-			message += fmt.Sprintf("... [truncated after %d bytes]", maxKubeletErrorBodyBytes)
-		}
-		return nil, fmt.Errorf("http: %s, status: %d, body: %s", url, resp.StatusCode, message)
+		return nil, fmt.Errorf(
+			"http: %s, status: %d, body: %s", url,
+			resp.StatusCode,
+			requestErrorBody(body),
+		)
 	}
 
 	if resp.ContentLength > maxKubeletResponseBodyBytes {
@@ -434,7 +434,9 @@ func requestLimitedBody(body io.Reader, limit int64) ([]byte, bool, error) {
 	if int64(len(data)) <= limit {
 		return data, false, nil
 	}
-	return data[:len(data)-1], true, nil
+	// Preserve the probe byte so error formatting can identify truncation without
+	// carrying separate state.
+	return data, true, nil
 }
 
 func requestErrorBody(body []byte) string {

@@ -154,12 +154,15 @@ func TestHTTPDoRequestRejectsDeclaredOversizedBodyWithoutReading(t *testing.T) {
 func TestHTTPDoRequestBoundsUnknownLengthBody(t *testing.T) {
 	const limit = int64(64)
 	body := &trackingReadCloser{reader: strings.NewReader(strings.Repeat("x", 128))}
-	_, truncated, err := requestLimitedBody(body, limit)
+	data, truncated, err := requestLimitedBody(body, limit)
 	if err != nil || !truncated {
 		t.Fatalf("requestLimitedBody() err=%v truncated=%v, want overflow", err, truncated)
 	}
 	if body.read != int(limit+1) {
 		t.Fatalf("body bytes read=%d, want %d", body.read, limit+1)
+	}
+	if len(data) != int(limit+1) {
+		t.Fatalf("returned body length=%d, want %d", len(data), limit+1)
 	}
 }
 
@@ -241,8 +244,8 @@ func TestHTTPDoRequestTruncatesNonOKBody(t *testing.T) {
 	if err == nil {
 		t.Fatal("httpDoRequest() error=nil, want non-OK response")
 	}
-	if !strings.Contains(err.Error(), "[truncated after 8192 bytes]") {
-		t.Fatalf("httpDoRequest() error=%q, want truncation marker", err)
+	if count := strings.Count(err.Error(), "[truncated after 8192 bytes]"); count != 1 {
+		t.Fatalf("httpDoRequest() truncation markers=%d, want 1: %q", count, err)
 	}
 	if body.read != maxKubeletErrorBodyBytes+1 {
 		t.Fatalf("body bytes read=%d, want %d", body.read, maxKubeletErrorBodyBytes+1)
