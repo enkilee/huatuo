@@ -30,6 +30,7 @@ import (
 
 	"huatuo-bamai/internal/log"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -282,6 +283,11 @@ func TestHTTPDoRequestWarnsWhenResponseExceedsLimit(t *testing.T) {
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(os.Stdout) })
+	previousWarning := kubeletOversizedResponseWarning
+	kubeletOversizedResponseWarning = &rate.Sometimes{
+		Interval: kubeletOversizedResponseWarningInterval,
+	}
+	t.Cleanup(func() { kubeletOversizedResponseWarning = previousWarning })
 	body := &trackingReadCloser{reader: strings.NewReader("unused")}
 	client := &http.Client{Transport: kubeletRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -292,9 +298,11 @@ func TestHTTPDoRequestWarnsWhenResponseExceedsLimit(t *testing.T) {
 		}, nil
 	})}
 	requestURL := "http://test.kubelet.invalid/pods"
-	_, err := httpDoRequest(client, requestURL)
-	if err == nil {
-		t.Fatal("httpDoRequest() error=nil, want size rejection")
+	for attempt := range 2 {
+		_, err := httpDoRequest(client, requestURL)
+		if err == nil {
+			t.Fatalf("httpDoRequest() attempt %d error=nil, want size rejection", attempt+1)
+		}
 	}
 	output := logs.String()
 	for _, want := range []string{
@@ -307,6 +315,9 @@ func TestHTTPDoRequestWarnsWhenResponseExceedsLimit(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("warning log=%q, want field %q", output, want)
 		}
+	}
+	if count := strings.Count(output, "rejecting oversized kubelet response"); count != 1 {
+		t.Errorf("warning count=%d, want 1; output=%q", count, output)
 	}
 }
 

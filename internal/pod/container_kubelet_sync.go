@@ -31,25 +31,30 @@ import (
 	"huatuo-bamai/internal/log"
 	"huatuo-bamai/internal/utils/netutil"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 )
 
 const (
-	kubeletReqTimeout           = 5 * time.Second
-	maxKubeletResponseBodyBytes = 128 << 20
-	maxKubeletErrorBodyBytes    = 8 << 10
+	kubeletReqTimeout                       = 5 * time.Second
+	kubeletOversizedResponseWarningInterval = 30 * time.Minute
+	maxKubeletResponseBodyBytes             = 128 << 20
+	maxKubeletErrorBodyBytes                = 8 << 10
 )
 
 var (
-	kubeletPodListRunningEnabled = false
-	kubeletPodListURL            string
-	kubeletPodListClient         *http.Client
-	kubeletTimeTicker            *time.Ticker
-	kubeletDoneCancel            context.CancelFunc
-	kubeletPodCgroupDriver       = "cgroupfs"
-	kubeletRuntimeEndpoint       = "unix:///run/containerd/containerd.sock"
-	kubeletDefaultConfigPath     = []string{
+	kubeletPodListRunningEnabled    = false
+	kubeletPodListURL               string
+	kubeletPodListClient            *http.Client
+	kubeletTimeTicker               *time.Ticker
+	kubeletDoneCancel               context.CancelFunc
+	kubeletPodCgroupDriver          = "cgroupfs"
+	kubeletRuntimeEndpoint          = "unix:///run/containerd/containerd.sock"
+	kubeletOversizedResponseWarning = &rate.Sometimes{
+		Interval: kubeletOversizedResponseWarningInterval,
+	}
+	kubeletDefaultConfigPath = []string{
 		"/var/lib/kubelet/config.yaml",
 		"/var/lib/kubelet/ack-managed-config.yaml",
 		"/etc/kubernetes/kubelet/config.json",
@@ -383,11 +388,13 @@ func httpDoRequest(client *http.Client, url string) ([]byte, error) {
 			resp.ContentLength,
 			maxKubeletResponseBodyBytes,
 		)
-		log.WithError(err).
-			WithField("url", url).
-			WithField("declared_size_bytes", resp.ContentLength).
-			WithField("limit_bytes", maxKubeletResponseBodyBytes).
-			Warn("rejecting oversized kubelet response")
+		kubeletOversizedResponseWarning.Do(func() {
+			log.WithError(err).
+				WithField("url", url).
+				WithField("declared_size_bytes", resp.ContentLength).
+				WithField("limit_bytes", maxKubeletResponseBodyBytes).
+				Warn("rejecting oversized kubelet response")
+		})
 		return nil, err
 	}
 
@@ -403,11 +410,13 @@ func httpDoRequest(client *http.Client, url string) ([]byte, error) {
 			url,
 			maxKubeletResponseBodyBytes,
 		)
-		log.WithError(err).
-			WithField("url", url).
-			WithField("observed_size_bytes", maxKubeletResponseBodyBytes+1).
-			WithField("limit_bytes", maxKubeletResponseBodyBytes).
-			Warn("rejecting oversized kubelet response")
+		kubeletOversizedResponseWarning.Do(func() {
+			log.WithError(err).
+				WithField("url", url).
+				WithField("observed_size_bytes", maxKubeletResponseBodyBytes+1).
+				WithField("limit_bytes", maxKubeletResponseBodyBytes).
+				Warn("rejecting oversized kubelet response")
+		})
 		return nil, err
 	}
 
