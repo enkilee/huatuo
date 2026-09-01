@@ -15,6 +15,7 @@
 package transport
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -37,6 +38,9 @@ func TestListenUDSCreatesMissingSocket(t *testing.T) {
 	}
 	if info.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("mode = %v, want Unix socket", info.Mode())
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o660); got != want {
+		t.Fatalf("permissions = %v, want %v", got, want)
 	}
 }
 
@@ -124,4 +128,53 @@ func TestListenerClosePreservesReplacedPath(t *testing.T) {
 	if string(data) != "replacement" {
 		t.Fatalf("replacement content = %q, want replacement", data)
 	}
+}
+
+func TestListenerCloseRemovesOwnedSocket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "toolstream.sock")
+	listener, err := ListenUDS(path)
+	if err != nil {
+		t.Fatalf("ListenUDS: %v", err)
+	}
+
+	if err := listener.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Lstat after Close error = %v, want not exist", err)
+	}
+}
+
+func TestRemoveSocketIfSamePreservesReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "toolstream.sock")
+	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatalf("create stale socket: %v", err)
+	}
+	stale.SetUnlinkOnClose(false)
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat stale socket: %v", err)
+	}
+	if err := stale.Close(); err != nil {
+		t.Fatalf("close stale socket: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove stale socket: %v", err)
+	}
+
+	replacement, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("create replacement socket: %v", err)
+	}
+	t.Cleanup(func() { _ = replacement.Close() })
+
+	if err := removeSocketIfSame(path, info); err != nil {
+		t.Fatalf("removeSocketIfSame: %v", err)
+	}
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("replacement socket was removed: %v", err)
+	}
+	_ = conn.Close()
 }
