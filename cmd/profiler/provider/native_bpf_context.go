@@ -190,13 +190,17 @@ func (r *ringBufferContext) drainFrozenRingBuffer(
 	// Batch-read events until everything the BPF side wrote has been consumed.
 	// The kernel may keep writing to the just-frozen ring briefly after the
 	// parity flip, so re-check the sample count and keep draining until the
-	// number of events read equals the BPF-reported count.
-	totalRead := uint64(0)
+	// delivered and lost samples account for the BPF-reported count.
+	var totalRead, totalAccounted uint64
 	for {
 		batch, err := ring.reader.ReadBatch(newEvent)
-		totalRead += uint64(len(batch))
+		eventCount := uint64(len(batch.Events))
+		totalRead += eventCount
+		// BPF increments the sample count before output, so both delivered and
+		// lost samples satisfy the frozen-ring transfer protocol.
+		totalAccounted += eventCount + batch.LostSamples
 
-		for _, rec := range batch {
+		for _, rec := range batch.Events {
 			var base *abi.ProfilerEventBase
 			switch event := rec.(type) {
 			case *abi.ProfilerEventBase:
@@ -234,6 +238,10 @@ func (r *ringBufferContext) drainFrozenRingBuffer(
 			sampleCountsByProcess[process][stackIDs] += value
 		}
 
+		if batch.LostSamples != 0 {
+			log.Warnf("BPF perf event samples lost: %d", batch.LostSamples)
+		}
+
 		if err != nil {
 			if errors.Is(err, types.ErrExitByCancelCtx) {
 				return nil, frozenRingBuffer{}, err
@@ -242,11 +250,11 @@ func (r *ringBufferContext) drainFrozenRingBuffer(
 			break
 		}
 
-		log.Debugf("drain batch: read=%d total=%d procs=%d", len(batch), totalRead, len(sampleCountsByProcess))
+		log.Debugf("drain batch: read=%d total=%d procs=%d", len(batch.Events), totalRead, len(sampleCountsByProcess))
 
 		// An empty batch means the ring is drained for now; avoid spinning
 		// even if the BPF count has not been fully matched.
-		if len(batch) == 0 {
+		if len(batch.Events) == 0 && batch.LostSamples == 0 {
 			break
 		}
 
@@ -255,9 +263,14 @@ func (r *ringBufferContext) drainFrozenRingBuffer(
 			return nil, frozenRingBuffer{}, fmt.Errorf("read sampleCnt: %w", err)
 		}
 
-		log.Debugf("drain check: totalRead=%d bpfCount=%d", totalRead, bpfCount)
+		log.Debugf(
+			"drain check: totalRead=%d totalAccounted=%d bpfCount=%d",
+			totalRead,
+			totalAccounted,
+			bpfCount,
+		)
 
-		if totalRead >= bpfCount {
+		if totalAccounted >= bpfCount {
 			break
 		}
 	}

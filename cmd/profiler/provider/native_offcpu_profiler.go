@@ -144,27 +144,21 @@ func (p *cpuNativeProfiler) readOffCPUDataLoop(
 
 	for {
 		batch, err := ringCtx.readerA.ReadBatch(func() any { return &abi.ProfilerOffCPUEvent{} })
-		ringCtx.aggregateOffCPUBatch(batch, enqueue)
+		ringCtx.aggregateOffCPUBatch(batch.Events, enqueue)
+
+		if batch.LostSamples != 0 {
+			log.Warnf("off-CPU perf event samples lost: %d", batch.LostSamples)
+		}
 
 		if err != nil {
 			if errors.Is(err, types.ErrExitByCancelCtx) {
 				return nil
 			}
 
-			var lostErr *bpf.PerfEventSamplesLostError
-			if !errors.As(err, &lostErr) {
-				return fmt.Errorf("read off-CPU perf event batch: %w", err)
-			}
-
-			log.Warnf("off-CPU perf event samples lost: %d", lostErr.Count)
-			// ReadBatch joins sample loss with read or decode failures.
-			var joinedErr interface{ Unwrap() []error }
-			if errors.As(err, &joinedErr) {
-				return fmt.Errorf("read off-CPU perf event batch: %w", err)
-			}
+			return fmt.Errorf("read off-CPU perf event batch: %w", err)
 		}
 
-		if len(batch) == 0 {
+		if len(batch.Events) == 0 {
 			select {
 			case <-ctx.Done():
 				return nil

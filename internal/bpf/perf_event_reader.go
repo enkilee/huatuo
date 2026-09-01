@@ -35,6 +35,13 @@ func (e *PerfEventSamplesLostError) Unwrap() error {
 	return ErrPerfEventSamplesLost
 }
 
+// PerfEventBatch contains decoded events and sample loss observed during one
+// ReadBatch call. Events remain valid when ReadBatch returns an error.
+type PerfEventBatch struct {
+	Events      []any
+	LostSamples uint64
+}
+
 // PerfEventReader reads the eBPF perf_event.
 type PerfEventReader interface {
 	// ReadInto reads the next eBPF perf event into dst. Sample loss returns
@@ -43,7 +50,8 @@ type PerfEventReader interface {
 
 	// ReadBatch drains all per-CPU ring buffers currently available within a
 	// bounded deadline. newEvent must return a new event destination per call.
-	ReadBatch(newEvent func() any) ([]any, error)
+	// The returned batch may contain events and sample loss when err is non-nil.
+	ReadBatch(newEvent func() any) (PerfEventBatch, error)
 
 	// Close the PerfEventReader.
 	Close() error

@@ -15,10 +15,13 @@
 package provider
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 
 	"huatuo-bamai/internal/bpf"
+	"huatuo-bamai/internal/bpf/abi"
+	"huatuo-bamai/internal/profiler/bpfmap"
 )
 
 type closeBPFStub struct {
@@ -69,4 +72,99 @@ func TestCloseBPF(t *testing.T) {
 			t.Fatal("closeBPF() did not call BPF.Close")
 		}
 	})
+}
+
+type frozenRingReaderStub struct {
+	batches []bpf.PerfEventBatch
+	reads   int
+}
+
+func (*frozenRingReaderStub) ReadInto(any) error {
+	return nil
+}
+
+func (r *frozenRingReaderStub) ReadBatch(func() any) (bpf.PerfEventBatch, error) {
+	if r.reads >= len(r.batches) {
+		return bpf.PerfEventBatch{}, nil
+	}
+
+	batch := r.batches[r.reads]
+	r.reads++
+	return batch, nil
+}
+
+func (*frozenRingReaderStub) Close() error {
+	return nil
+}
+
+type frozenRingBPFStub struct {
+	bpf.BPF
+	values map[uint32]uint64
+}
+
+func (b *frozenRingBPFStub) ReadMap(_ uint32, key []byte) ([]byte, error) {
+	value := make([]byte, 8)
+	binary.LittleEndian.PutUint64(value, b.values[binary.LittleEndian.Uint32(key)])
+	return value, nil
+}
+
+func (b *frozenRingBPFStub) WriteMapItems(_ uint32, items []bpf.MapItem) error {
+	for _, item := range items {
+		key := binary.LittleEndian.Uint32(item.Key)
+		b.values[key] = binary.LittleEndian.Uint64(item.Value)
+	}
+	return nil
+}
+
+func TestDrainFrozenRingBufferContinuesAfterSamplesLost(t *testing.T) {
+	first := &abi.ProfilerEventBase{
+		PIDTGID:   uint64(100) << 32,
+		Value:     1,
+		Kernstack: 1,
+		Userstack: -1,
+	}
+	second := &abi.ProfilerEventBase{
+		PIDTGID:   uint64(100) << 32,
+		Value:     2,
+		Kernstack: 1,
+		Userstack: -1,
+	}
+	reader := &frozenRingReaderStub{
+		batches: []bpf.PerfEventBatch{
+			{LostSamples: 1},
+			{Events: []any{first, second}},
+		},
+	}
+	bpfStub := &frozenRingBPFStub{
+		values: map[uint32]uint64{
+			bpfmap.TransferCountIdx: 0,
+			bpfmap.SampleCountAIdx:  3,
+		},
+	}
+	ringCtx := &ringBufferContext{
+		bpf:                bpfStub,
+		readerA:            reader,
+		transferStateMapID: 1,
+		stackMapAID:        2,
+	}
+
+	got, _, err := ringCtx.drainFrozenRingBuffer(
+		func() any { return &abi.ProfilerEventBase{} },
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("drainFrozenRingBuffer() error = %v", err)
+	}
+	if reader.reads != 2 {
+		t.Fatalf("ReadBatch() calls = %d, want 2", reader.reads)
+	}
+
+	process := processKey{PID: 100}
+	stackIDs := rawStackIDs{KernelStackID: 1, UserStackID: -1}
+	if value := got[process][stackIDs]; value != 3 {
+		t.Fatalf("aggregated value = %d, want 3", value)
+	}
+	if value := bpfStub.values[bpfmap.SampleCountAIdx]; value != 0 {
+		t.Fatalf("sample count after drain = %d, want 0", value)
+	}
 }

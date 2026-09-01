@@ -63,61 +63,51 @@ func (r *perfEventReader) Close() error {
 const readBatchDeadline = 500 * time.Millisecond
 
 // ReadBatch drains all per-CPU ring buffers currently available and returns the
-// parsed events. It returns any decoded events with read, decode, or loss
-// errors so callers can preserve partial progress.
-func (r *perfEventReader) ReadBatch(newEvent func() any) ([]any, error) {
+// parsed events and sample loss. It returns partial results with read or decode
+// errors so callers can preserve progress.
+func (r *perfEventReader) ReadBatch(newEvent func() any) (PerfEventBatch, error) {
 	select {
 	case <-r.done:
-		return nil, types.ErrExitByCancelCtx
+		return PerfEventBatch{}, types.ErrExitByCancelCtx
 	default:
 	}
 
 	if newEvent == nil {
-		return nil, fmt.Errorf(
+		return PerfEventBatch{}, fmt.Errorf(
 			"%w: factory required", errInvalidPerfEventFactory,
 		)
 	}
 
 	r.rd.SetDeadline(time.Now().Add(readBatchDeadline))
 
-	var batch []any
+	var batch PerfEventBatch
 	var rec perf.Record
-	var lostSamples uint64
 
 	for {
 		if err := r.rd.ReadInto(&rec); err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				return batch, newPerfEventSamplesLostError(lostSamples)
+				return batch, nil
 			}
 
-			return batch, errors.Join(
-				normalizePerfReadError(err),
-				newPerfEventSamplesLostError(lostSamples),
-			)
+			return batch, normalizePerfReadError(err)
 		}
 
 		if rec.LostSamples != 0 {
-			lostSamples += rec.LostSamples
+			batch.LostSamples += rec.LostSamples
 			continue
 		}
 
 		dst := newEvent()
 		if dst == nil {
-			return batch, errors.Join(
-				fmt.Errorf(
-					"%w: factory returned nil", errInvalidPerfEventFactory,
-				),
-				newPerfEventSamplesLostError(lostSamples),
+			return batch, fmt.Errorf(
+				"%w: factory returned nil", errInvalidPerfEventFactory,
 			)
 		}
 		if err := decodePerfEvent(rec.RawSample, dst); err != nil {
-			return batch, errors.Join(
-				err,
-				newPerfEventSamplesLostError(lostSamples),
-			)
+			return batch, err
 		}
 
-		batch = append(batch, dst)
+		batch.Events = append(batch.Events, dst)
 	}
 }
 
@@ -142,7 +132,7 @@ func (r *perfEventReader) ReadInto(dst any) error {
 			}
 
 			if record.LostSamples != 0 {
-				return newPerfEventSamplesLostError(record.LostSamples)
+				return &PerfEventSamplesLostError{Count: record.LostSamples}
 			}
 
 			if err := decodePerfEvent(record.RawSample, dst); err != nil {
@@ -160,14 +150,6 @@ func decodePerfEvent(sample []byte, dst any) error {
 	}
 
 	return nil
-}
-
-func newPerfEventSamplesLostError(count uint64) error {
-	if count == 0 {
-		return nil
-	}
-
-	return &PerfEventSamplesLostError{Count: count}
 }
 
 func normalizePerfReadError(err error) error {

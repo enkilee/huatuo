@@ -57,13 +57,12 @@ func TestNormalizePerfReadError(t *testing.T) {
 func TestPerfEventSamplesLostError(t *testing.T) {
 	t.Parallel()
 
-	err := newPerfEventSamplesLostError(7)
+	err := &PerfEventSamplesLostError{Count: 7}
 	require.ErrorIs(t, err, ErrPerfEventSamplesLost)
 
 	var lostErr *PerfEventSamplesLostError
 	require.ErrorAs(t, err, &lostErr)
 	require.Equal(t, uint64(7), lostErr.Count)
-	require.NoError(t, newPerfEventSamplesLostError(0))
 }
 
 func TestDecodePerfEvent(t *testing.T) {
@@ -88,7 +87,9 @@ func TestPerfEventReaderReadBatchRequiresFactory(t *testing.T) {
 	t.Parallel()
 
 	r := &perfEventReader{done: make(chan struct{})}
-	_, err := r.ReadBatch(nil)
+	batch, err := r.ReadBatch(nil)
+	require.Empty(t, batch.Events)
+	require.Zero(t, batch.LostSamples)
 	require.ErrorIs(t, err, errInvalidPerfEventFactory)
 	require.ErrorContains(t, err, "factory required")
 }
