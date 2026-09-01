@@ -53,16 +53,16 @@ func (s *memoryPipelineBPFStub) WriteMapItems(mapID uint32, items []bpf.MapItem)
 }
 
 type memoryPipelineReaderStub struct {
-	batch []any
+	batch bpf.PerfEventBatch
 }
 
 func (s *memoryPipelineReaderStub) ReadInto(any) error {
 	return nil
 }
 
-func (s *memoryPipelineReaderStub) ReadBatch(func() any) ([]any, error) {
+func (s *memoryPipelineReaderStub) ReadBatch(func() any) (bpf.PerfEventBatch, error) {
 	batch := s.batch
-	s.batch = nil
+	s.batch = bpf.PerfEventBatch{}
 	return batch, nil
 }
 
@@ -87,14 +87,18 @@ func TestMemoryValueConvertedOnceAfterAggregation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := &memoryPipelineBPFStub{state: [3]uint64{0, 1, 0}}
-			reader := &memoryPipelineReaderStub{batch: []any{
-				&abi.ProfilerEventBase{
-					PIDTGID:   uint64(123) << 32,
-					Kernstack: 0,
-					Userstack: -1,
-					Value:     tt.raw,
+			reader := &memoryPipelineReaderStub{
+				batch: bpf.PerfEventBatch{
+					Events: []any{
+						&abi.ProfilerEventBase{
+							PIDTGID:   uint64(123) << 32,
+							Kernstack: 0,
+							Userstack: -1,
+							Value:     tt.raw,
+						},
+					},
 				},
-			}}
+			}
 			ringCtx := &ringBufferContext{
 				bpf:                b,
 				readerA:            reader,

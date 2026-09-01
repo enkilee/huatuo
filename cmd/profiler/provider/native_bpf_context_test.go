@@ -150,7 +150,6 @@ func TestDrainFrozenRingBufferContinuesAfterSamplesLost(t *testing.T) {
 
 	got, _, err := ringCtx.drainFrozenRingBuffer(
 		func() any { return &abi.ProfilerEventBase{} },
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("drainFrozenRingBuffer() error = %v", err)
