@@ -129,7 +129,6 @@ func (r *trackingReadCloser) Close() error {
 }
 
 func TestHTTPDoRequestRejectsDeclaredOversizedBodyWithoutReading(t *testing.T) {
-	const limit = int64(64)
 	body := &trackingReadCloser{reader: strings.NewReader(strings.Repeat("x", 65))}
 	client := &http.Client{Transport: kubeletRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{

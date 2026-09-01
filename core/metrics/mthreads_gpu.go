@@ -679,7 +679,8 @@ func collectMthreadsHealth(ctx context.Context, dev *mtml.Device, gpu uint32) ([
 	// VPU
 	if vpu != nil {
 		if util, err := vpu.Utilization(); err == nil {
-			out = append(out,
+			out = append(
+				out,
 				metric.NewGaugeData("vpu_utilization_percent", float64(util.Util),
 					"GPU VPU utilization (0-100).", map[string]string{"gpu": gpuLabel}),
 				metric.NewGaugeData("vpu_encoder_utilization_percent", float64(util.EncUtil),
@@ -721,7 +722,8 @@ func collectMthreadsPCIe(ctx context.Context, dev *mtml.Device, gpu uint32) ([]*
 	}
 
 	if info, err := dev.PciInfo(); err == nil {
-		out = append(out,
+		out = append(
+			out,
 			metric.NewGaugeData("pcie_link_speed_gt_per_sec", info.CurSpeed,
 				"GPU PCIe current link speed in GT/s.", map[string]string{"gpu": gpuLabel}),
 			metric.NewGaugeData("pcie_link_width_lanes", float64(info.CurWidth),
@@ -770,7 +772,8 @@ func collectMthreadsMtLink(ctx context.Context, dev *mtml.Device, gpu uint32) ([
 	}
 	// Bandwidth/count are per-device static specs (not per-link live throughput),
 	// so they don't get a `link` label.
-	out = append(out,
+	out = append(
+		out,
 		metric.NewGaugeData("mtlink_link_bandwidth_gb_s", float64(spec.BandWidth),
 			"GPU MtLink per-link max bandwidth in GB/s (device static spec, not live throughput).",
 			map[string]string{"gpu": gpuLabel}),
