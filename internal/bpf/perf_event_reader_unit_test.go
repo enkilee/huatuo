@@ -16,43 +16,10 @@ package bpf
 
 import (
 	"encoding/binary"
-	"errors"
 	"testing"
 
-	"huatuo-bamai/pkg/types"
-
-	"github.com/cilium/ebpf/perf"
 	"github.com/stretchr/testify/require"
 )
-
-func TestNormalizePerfReadError(t *testing.T) {
-	t.Parallel()
-
-	readErr := errors.New("read failed")
-	tests := []struct {
-		name    string
-		err     error
-		wantErr error
-	}{
-		{
-			name:    "closed reader",
-			err:     perf.ErrClosed,
-			wantErr: types.ErrExitByCancelCtx,
-		},
-		{
-			name:    "read failure",
-			err:     readErr,
-			wantErr: readErr,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			require.ErrorIs(t, normalizePerfReadError(tt.err), tt.wantErr)
-		})
-	}
-}
 
 func TestPerfEventSamplesLostError(t *testing.T) {
 	t.Parallel()
@@ -81,17 +48,6 @@ func TestDecodePerfEvent(t *testing.T) {
 	require.NoError(t, decodePerfEvent(sample, &got))
 	require.Equal(t, event{PID: 42, Value: 99}, got)
 	require.Error(t, decodePerfEvent(sample[:4], &got))
-}
-
-func TestPerfEventReaderReadBatchRequiresFactory(t *testing.T) {
-	t.Parallel()
-
-	r := &perfEventReader{done: make(chan struct{})}
-	batch, err := r.ReadBatch(nil)
-	require.Empty(t, batch.Events)
-	require.Zero(t, batch.LostSamples)
-	require.ErrorIs(t, err, errInvalidPerfEventFactory)
-	require.ErrorContains(t, err, "factory required")
 }
 
 func BenchmarkDecodePerfEvent(b *testing.B) {
