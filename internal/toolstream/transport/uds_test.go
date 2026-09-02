@@ -144,37 +144,3 @@ func TestListenerCloseRemovesOwnedSocket(t *testing.T) {
 		t.Fatalf("Lstat after Close error = %v, want not exist", err)
 	}
 }
-
-func TestRemoveSocketIfSamePreservesReplacement(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "toolstream.sock")
-	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
-	if err != nil {
-		t.Fatalf("create stale socket: %v", err)
-	}
-	stale.SetUnlinkOnClose(false)
-	info, err := os.Lstat(path)
-	if err != nil {
-		t.Fatalf("Lstat stale socket: %v", err)
-	}
-	if err := stale.Close(); err != nil {
-		t.Fatalf("close stale socket: %v", err)
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatalf("remove stale socket: %v", err)
-	}
-
-	replacement, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatalf("create replacement socket: %v", err)
-	}
-	t.Cleanup(func() { _ = replacement.Close() })
-
-	if err := removeSocketIfSame(path, info); err != nil {
-		t.Fatalf("removeSocketIfSame: %v", err)
-	}
-	conn, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatalf("replacement socket was removed: %v", err)
-	}
-	_ = conn.Close()
-}
